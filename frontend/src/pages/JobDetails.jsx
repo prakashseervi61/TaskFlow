@@ -92,7 +92,7 @@ export default function JobDetails() {
 
   return (
     <div className="min-h-screen">
-      <Header jobCount={0} />
+      <Header />
 
       <main className="mx-auto max-w-3xl space-y-4 px-6 py-6">
         <Link to="/" className="text-sm text-slate-600 hover:text-slate-900 hover:underline">

@@ -17,8 +17,8 @@ export const badgeClass = (status) => BADGE_CLASS[status] ?? BADGE_CLASS.PENDING
 export const isActive = (status) => status === 'QUEUED' || status === 'RUNNING'
 
 /** A FAILED job can be retried while it still has attempts, or requeued afterwards. */
-export const canRetry = (job) => job.status === 'FAILED' && job.attemptsLeft > 0
+export const canRetry = (job) => job?.status === 'FAILED' && job.attemptsLeft > 0
 
-export const canRequeue = (job) => job.status === 'FAILED' && job.attemptsLeft === 0
+export const canRequeue = (job) => job?.status === 'FAILED' && job.attemptsLeft === 0
 
-export const canRun = (job) => job.status === 'PENDING' || canRetry(job)
+export const canRun = (job) => job?.status === 'PENDING' || canRetry(job)

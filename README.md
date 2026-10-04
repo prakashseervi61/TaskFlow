@@ -1,479 +1,372 @@
-# TaskFlow — Job Processing Platform (v0.3)
+<div align="center">
 
-A full-stack job processing app: create jobs, run them through an asynchronous Redis queue, and
-watch retries and dead letters happen in real time.
+# TaskFlow
 
-| Release | What changed |
-| ------- | ------------ |
-| **v0.3** | Flyway migrations, retries with exponential backoff, dead-letter queue, pluggable job handlers with payloads, keyset pagination |
-| v0.2 | Redis queue + separate worker service, graceful Redis/worker failure handling, Docker Compose |
-| v0.1 | CRUD + simulated in-process execution |
+**A background job processing platform.**
+Submit work through a REST API, run it asynchronously via a Redis queue and a separate worker, with retries and a dead-letter queue built in.
 
-```
-React  ─▶ Backend API ─▶ PostgreSQL ──(LPUSH, after commit)──▶ Redis ──(BRPOP)──▶ Worker ─▶ PostgreSQL
-                                    taskflow:jobs                       taskflow:jobs:scheduled
-                                    taskflow:jobs:dlq
-```
+[![Java](https://img.shields.io/badge/Java-21-%23ED8B00?logo=openjdk&logoColor=white)](https://openjdk.org/)
+[![Spring Boot](https://img.shields.io/badge/Spring%20Boot-3.4-6DB33F?logo=springboot&logoColor=white)](https://spring.io/projects/spring-boot)
+[![React](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=black)](https://react.dev/)
+[![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16-4169E1?logo=postgresql&logoColor=white)](https://www.postgresql.org/)
+[![Redis](https://img.shields.io/badge/Redis-7-DC382D?logo=redis&logoColor=white)](https://redis.io/)
+[![Docker](https://img.shields.io/badge/Docker-Compose-2496ED?logo=docker&logoColor=white)](https://docs.docker.com/compose/)
 
-```
-PENDING ──Run──▶ QUEUED ──claim(attempt+1)──▶ RUNNING ──┬─▶ COMPLETED
-                   ▲                                     │
-                   └──── attempts left ───────┐          └─▶ FAILED
-                                               └─ exhausted ──▶ FAILED + dead letter
-```
+</div>
 
-| Layer    | Stack                                            |
-| -------- | ------------------------------------------------ |
-| Core     | Java 21 · Spring Data JPA (shared domain model)  |
-| Backend  | Java 21 · Spring Boot 3.4 · Maven · Flyway       |
-| Worker   | Java 21 · Spring Boot 3.4 · Spring Data Redis    |
-| Database | PostgreSQL                                      |
-| Queue    | Redis 7                                         |
-| Frontend | React 19 · Vite · Tailwind CSS 4                |
+<div align="center">
 
----
+![TaskFlow lifecycle](docs/images/lifecycle.gif)
 
-## 1. Project structure
+*Pressing **Run** — the job queues, a worker claims it, and it completes. The page updates itself.*
 
-```
-taskflow/
-├── pom.xml                       # aggregator: parent + modules core, backend, worker
-│
-├── core/                         # domain shared by the API and the worker
-│   └── src/main/
-│       ├── java/com/taskflow/
-│       │   ├── config/           # TaskflowProperties, RetryProperties
-│       │   ├── dto/              # CreateJobRequest, JobResponse, JobStatsResponse,
-│       │   │                     # JobPageResponse, ApiError
-│       │   ├── entity/           # Job, JobStatus, JobType
-│       │   ├── exception/        # JobNotFound, InvalidJobState
-│       │   ├── handler/          # JobHandler, JobExecutionContext
-│       │   ├── repository/JobRepository.java
-│       │   └── retry/            # BackoffPolicy, RetryConfig
-│       └── resources/db/migration/   # Flyway, shared by both services
-│           ├── V1__baseline.sql
-│           └── V2__durable_execution.sql
-│
-├── backend/                      # REST API
-│   └── src/main/
-│       ├── java/com/taskflow/
-│       │   ├── TaskflowApplication.java
-│       │   ├── config/{CorsConfig,AsyncConfig}.java
-│       │   ├── controller/JobController.java
-│       │   ├── exception/GlobalExceptionHandler.java
-│       │   ├── queue/{JobQueue,RedisJobQueue,QueueUnavailableException}.java
-│       │   └── service/
-│       │       ├── JobService.java             # CRUD, paging, retry rules
-│       │       ├── PageCursor.java             # opaque keyset cursor
-│       │       ├── JobExecutionRequested.java  # the event, unchanged since v0.2
-│       │       ├── JobExecutionDispatcher.java # after-commit → LPUSH
-│       │       └── JobReleaseService.java      # QUEUED → PENDING if Redis is down
-│       └── resources/application.yml
-│
-├── worker/                       # queue consumer
-│   └── src/main/
-│       ├── java/com/taskflow/worker/
-│       │   ├── WorkerApplication.java
-│       │   ├── config/{WorkerProperties,WorkerExecutorConfig,JobHandlerConfig}.java
-│       │   ├── handler/{SimulatedJobHandler,PingJobHandler,FailingJobHandler}.java
-│       │   └── job/
-│       │       ├── JobQueueWriter.java         # enqueue / schedule / dead letter
-│       │       ├── RedisJobQueueReader.java    # BRPOP
-│       │       ├── JobWorkerConsumer.java      # poll loop
-│       │       ├── JobExecutor.java            # claim → run → settle
-│       │       ├── AttemptOutcome.java
-│       │       ├── RetryScheduler.java         # promotes due retries
-│       │       └── QueuedJobRecovery.java      # startup re-publish
-│       └── resources/application.yml
-│
-├── frontend/
-│   └── src/{api,components,hooks,lib,pages}
-│
-├── docker/Dockerfile             # one image definition, MODULE build arg
-├── docker-compose.yml            # postgres + redis + backend + worker + frontend
-├── .dockerignore
-├── README.md
-└── .gitignore
-```
+</div>
 
-### Why a `core` module
+<div align="center">
 
-The API and the worker must agree on the `jobs` table, the `JobStatus` values, the job types
-and the conditional claim queries. `core` holds those once; both services depend on it, and the
-Flyway migrations live in its resources so both services run the same DDL.
+<img src="docs/images/dashboard.png" alt="TaskFlow dashboard" width="900">
+
+*Live counts per status, a create form with job types and payloads, and a paginated table with
+per-job attempts and actions.*
+
+</div>
 
 ---
 
-## 2. Quick start
+## The problem
+
+Slow work doesn't belong in a web request.
+
+```
+User clicks "Generate report"
+  → the request hangs for 40 seconds
+  → server restarts mid-way, the work is lost forever
+  → it fails halfway through and nothing knows
+  → 100 users at once = 100 overloaded threads
+```
+
+TaskFlow turns that into a queue:
+
+```
+User clicks "Generate report"
+  → API saves the job, pushes the id, returns in 5ms
+  → a background worker picks it up
+  → UI shows live progress
+  → failures retry automatically, then get quarantined
+```
+
+The request never blocks. Work survives restarts. Failures are handled.
+
+## The lifecycle
+
+```
+PENDING ──Run──▶ QUEUED ──worker claims──▶ RUNNING ──┬─▶ COMPLETED
+                  ▲                                   │
+                  └───── attempts remain ───────┐    └─▶ FAILED
+                                                └────── attempts used up ──▶ FAILED + dead letter
+```
+
+| Status     | Meaning                                                        |
+| ---------- | -------------------------------------------------------------- |
+| `PENDING`  | Created, waiting for you to run it                              |
+| `QUEUED`   | Its id is in Redis, waiting for a worker                         |
+| `RUNNING`  | A worker has claimed it and is executing                        |
+| `COMPLETED`| Finished successfully                                           |
+| `FAILED`   | Gave up. Requeue it to try again                                |
+
+---
+
+## Contents
+
+- [Features](#features)
+- [Quick start](#quick-start)
+- [Try it](#try-it)
+- [Architecture](#architecture)
+- [How it works](#how-it-works)
+- [API](#api)
+- [Configuration](#configuration)
+- [Project structure](#project-structure)
+- [Testing](#testing)
+- [Design decisions](#design-decisions)
+- [Limitations](#limitations)
+- [Roadmap](#roadmap)
+
+---
+
+## Features
+
+| | |
+|---|---|
+| **Async execution** | REST API enqueues, a separate worker service executes |
+| **Automatic retries** | Exponential backoff — 5s, 10s, 20s… capped at 5m |
+| **Dead-letter queue** | Exhausted jobs are quarantined, never silently dropped |
+| **Exactly-once execution** | Database-level claims mean retries and multiple workers can't double-run a job |
+| **Live UI** | Status updates every second, no refresh needed |
+| **Pluggable job types** | Write one handler, inherit the queue, retries and UI |
+| **Graceful degradation** | Redis or worker down? Jobs wait safely and resume automatically |
+| **Horizontal scaling** | `docker compose up -d --scale worker=3` |
+| **Cursor pagination** | Constant-time paging, stable while new jobs arrive |
+| **Flyway migrations** | Schema owned by versioned SQL, verified by Hibernate on boot |
+
+## Quick start
+
+Requires Docker and Docker Compose. Nothing else.
 
 ```bash
+git clone https://github.com/prakashseervi61/TaskFlow.git
+cd TaskFlow
 docker compose up --build
 ```
 
-| Service    | URL                                  |
-| ---------- | ------------------------------------ |
-| Frontend   | http://localhost:5173                |
-| API        | http://localhost:8080/api/jobs       |
-| API health | http://localhost:8080/actuator/health |
+Open **<http://localhost:5173>**.
 
-The worker publishes no host port — it is a consumer, and replicas must not fight over one.
-Watch it with `docker compose logs -f worker`.
+That starts five services: PostgreSQL, Redis, the API, the worker, and the frontend. No database setup, no seeding — Flyway creates the schema on first boot.
 
-Scale out; the database claim decides which replica owns a given job:
+<details>
+<summary>Running without Docker</summary>
 
-```bash
-docker compose up -d --scale worker=3
-```
-
-Teardown: `docker compose down` (add `-v` to drop volumes).
-
-If a host port is already taken, override it:
-
-```bash
-REDIS_PORT=6380 POSTGRES_PORT=5434 docker compose up -d
-```
-
----
-
-## 3. Running locally without Docker
+Needs JDK 21+, Maven, PostgreSQL and Redis.
 
 ```bash
 psql -U postgres -c "CREATE ROLE taskflow LOGIN PASSWORD 'taskflow';"
 psql -U postgres -c "CREATE DATABASE taskflow OWNER taskflow;"
 
-mvn clean package        # builds core, backend, worker
+mvn clean package
+
+export DB_HOST=localhost DB_NAME=taskflow DB_USERNAME=taskflow DB_PASSWORD=taskflow
+export REDIS_HOST=localhost
+java -jar backend/target/taskflow-backend-0.3.0.jar   # terminal 1
+
+java -jar worker/target/taskflow-worker-0.3.0.jar     # terminal 2
+
+cd frontend && npm install && npm run dev             # terminal 3
 ```
 
-**Backend** — port 8080
+</details>
+
+## Try it
+
+1. **Create a job** — pick `SIMULATED`, max attempts `3`. It appears as `PENDING`.
+2. **Press Run.** Watch it go `QUEUED → RUNNING → COMPLETED` without refreshing.
+3. **Open it** for timestamps, duration and attempt count.
+
+   <img src="docs/images/job-detail.png" alt="Job detail view" width="100%">
+
+4. **Watch a retry.** Create a job with type `FAIL` and run it. Each attempt fails, the delay grows between tries, and after the last attempt it lands as `FAILED` with a **Requeue** button.
+5. **Break it on purpose.** Stop the worker, press Run — the job waits in `QUEUED`. Start the worker and it picks up where it left off.
+
+## Architecture
+
+```
+┌────────┐     ┌──────────────┐     ┌─────────────┐     ┌───────┐     ┌────────┐
+│ React  │ ──▶ │  Backend API │ ──▶ │ PostgreSQL  │     │ Redis │ ◀── │ Worker │
+│        │     │              │     │             │     │       │     │        │
+│  :5173 │     │    :8080     │     │  system of  │     │ queue │     │ :8081  │
+└────────┘     └──────────────┘     │   record    │     └───────┘     └────────┘
+                 saves + enqueues    └─────────────┘       ▲                │
+                                                       LPUSH after         │
+                                                       DB commit           │
+                                                          └──── BRPOP ───────┘
+                                                               writes results
+```
+
+Three Redis keys, each with one job:
+
+| Key                      | Type        | Purpose                                      |
+| ------------------------ | ----------- | -------------------------------------------- |
+| `taskflow:jobs`          | list        | Job ids waiting for a worker                 |
+| `taskflow:jobs:scheduled`| sorted set  | Retries waiting out their backoff, scored by time |
+| `taskflow:jobs:dlq`      | list        | Ids whose retries were exhausted             |
+
+Inspect them live:
 
 ```bash
-export DB_HOST=localhost DB_PORT=5432 DB_NAME=taskflow
-export DB_USERNAME=taskflow DB_PASSWORD=taskflow
-export REDIS_HOST=localhost REDIS_PORT=6379
-
-java -jar backend/target/taskflow-backend-0.3.0.jar
+docker compose exec -T redis redis-cli LLEN  taskflow:jobs
+docker compose exec -T redis redis-cli ZRANGE taskflow:jobs:scheduled 0 -1 WITHSCORES
+docker compose exec -T redis redis-cli LRANGE taskflow:jobs:dlq 0 -1
 ```
 
-**Worker** — health endpoint on 8081
+## How it works
 
-```bash
-# same DB_* and REDIS_* variables
-export JOB_SIMULATED_DURATION_MS=2500 WORKER_CONCURRENCY=2
+### Nobody runs a job twice
 
-java -jar worker/target/taskflow-worker-0.3.0.jar
+Redis removes an id from the queue *before* the work is done, and it may deliver the same id
+more than once. With several workers, "exactly once" can't come from the queue — so it comes
+from the database. Every transition is one conditional UPDATE:
+
+```sql
+-- the worker's ownership handshake
+UPDATE jobs SET status = 'RUNNING', attempt_count = attempt_count + 1
+WHERE id = ? AND status = 'QUEUED';
 ```
 
-**Frontend** — port 5173
+Racing workers hit the same row. Exactly one gets `1 row updated`; the others get `0` and skip.
+The same trick at queue time stops a double-clicked Run button creating two jobs.
 
-```bash
-cd frontend && npm install && npm run dev
-```
+*Verified: 12 jobs across 3 worker replicas → 12 executions, 0 duplicates.*
 
-**Tests**
+### Publishing waits for the commit
 
-```bash
-mvn test            # 77 tests across core, backend, worker
-cd frontend && npm run lint && npm run build
-```
+The API publishes to Redis from an `AFTER_COMMIT` listener, not from inside the transaction.
+Publishing earlier is faster and lets the API report failures as `503` — but it also lets a
+worker consume an id whose row isn't committed yet, and that job would vanish. In v0.1 this bug
+stranded jobs in `RUNNING` forever.
 
----
+### Retries don't hold a worker
 
-## 4. Configuration
+Redis has no "push at time T". So a retry is scored in a **sorted set** by the instant it becomes
+eligible, and a one-second tick promotes whatever is due onto the main list. A job waiting out a
+ten-minute backoff costs one Redis entry, not a thread.
 
-### Backend
+### Nothing gets lost
 
-| Variable                   | Required | Default                 |
-| -------------------------- | -------- | ----------------------- |
-| `DB_HOST` / `DB_PORT` / `DB_NAME` / `DB_USERNAME` | no | `localhost` / `5432` / `taskflow` / `postgres` | |
-| `DB_PASSWORD`              | **yes**  | —                       |
-| `REDIS_HOST` / `REDIS_PORT` | no     | `localhost` / `6379`    |
-| `REDIS_PASSWORD` / `REDIS_DATABASE` | no | empty / `0`   |
-| `REDIS_TIMEOUT`            | no       | `2s`                    |
-| `JOB_QUEUE_KEY`            | no       | `taskflow:jobs`         |
-| `JOB_DEFAULT_MAX_ATTEMPTS` | no       | `3`                     |
-| `JOB_RETRY_BASE_DELAY`     | no       | `5s`                    |
-| `JOB_RETRY_MAX_DELAY`      | no       | `5m`                    |
-| `SERVER_PORT`              | no       | `8080`                  |
-| `CORS_ALLOWED_ORIGINS`     | no       | `http://localhost:5173` |
+| Something breaks | What happens |
+|---|---|
+| Redis unreachable (API) | Job is released back to `PENDING` with a reason; press Run again |
+| Redis unreachable (worker) | Loop logs, backs off 5s, resumes automatically |
+| Worker goes down | Jobs sit in `QUEUED` with ids in Redis; re-published on worker startup |
+| Worker dies mid-job | Same recovery, on the next startup |
+| Dead-letter push fails | Row is already `FAILED`, and the API lists dead letters from PostgreSQL |
 
-### Worker
+## API
 
-| Variable                    | Default          | Notes                                 |
-| --------------------------- | ---------------- | ------------------------------------- |
-| `DB_*`, `REDIS_*`           | —                | Must match the API's                  |
-| `JOB_QUEUE_KEY`              | `taskflow:jobs`  | Must match the API's                  |
-| `JOB_SIMULATED_DURATION_MS`  | `2500`           | Stands in for real work; `0` is instant |
-| `JOB_DEFAULT_MAX_ATTEMPTS`   | `3`              |                                         |
-| `JOB_RETRY_BASE_DELAY`       | `5s`             | Doubles per failed attempt             |
-| `JOB_RETRY_MAX_DELAY`        | `5m`             | Ceiling for the doubling               |
-| `WORKER_CONCURRENCY`         | `2`              | Jobs per instance at once              |
-| `WORKER_POLL_TIMEOUT`        | `5s`             | Blocking read timeout                  |
-| `WORKER_RETRY_SCAN_INTERVAL_MS` | `1000`       | How often due retries are promoted     |
-| `WORKER_FAILURE_MESSAGE`     | `Job failed on purpose` | Message from the FAIL type       |
-| `WORKER_RECOVER_ON_STARTUP`  | `true`           | Re-publish stranded QUEUED jobs        |
-| `WORKER_SERVER_PORT`         | `8081`           | Serves `/actuator/health`              |
+Base URL `http://localhost:8080`
 
-Copy `backend/.env.example` and `worker/.env.example` as a starting point. No password is
-hardcoded.
+| Method | Path | Result |
+|---|---|---|
+| `POST` | `/api/jobs` | `201` create a job |
+| `GET` | `/api/jobs` | `200` one page — `?limit=&cursor=` |
+| `GET` | `/api/jobs/{id}` | `200` job detail |
+| `GET` | `/api/jobs/stats` | `200` counts per status |
+| `GET` | `/api/jobs/dead-letter` | `200` exhausted jobs |
+| `POST` | `/api/jobs/{id}/execute` | `200` queue a job |
+| `POST` | `/api/jobs/{id}/requeue` | `200` retry a failed job |
+| `DELETE` | `/api/jobs/{id}` | `204` delete |
 
----
-
-## 5. API
-
-Base URL `http://localhost:8080`.
-
-| Method   | Path                      | Success | Errors      | Description                       |
-| -------- | ------------------------- | ------- | ----------- | --------------------------------- |
-| `POST`   | `/api/jobs`               | `201`   | `400`       | Create a job (`PENDING`)          |
-| `GET`    | `/api/jobs`               | `200`   | —           | One page, newest first            |
-| `GET`    | `/api/jobs/{id}`          | `200`   | `404`       | Job details                       |
-| `GET`    | `/api/jobs/stats`         | `200`   | —           | Counts per status                 |
-| `GET`    | `/api/jobs/dead-letter`   | `200`   | —           | Jobs whose retries were exhausted |
-| `POST`   | `/api/jobs/{id}/execute`  | `200`   | `404`, `409`| Queue a PENDING or retryable FAILED job |
-| `POST`   | `/api/jobs/{id}/requeue`  | `200`   | `404`, `409`| Reset a FAILED job to PENDING with a fresh budget |
-| `DELETE` | `/api/jobs/{id}`          | `204`   | `404`       | Delete a job                      |
-
-**Create request**
-
-| Field         | Type   | Rules                                              |
-| ------------- | ------ | -------------------------------------------------- |
-| `name`        | string | required, 1–120 chars                              |
-| `description` | string | required, 1–2000 chars                             |
-| `jobType`     | string | optional; `SIMULATED` (default), `PING`, `FAIL`    |
-| `payload`     | object | optional free-form handler input                   |
-| `maxAttempts` | int    | optional 1–10, defaults to 3                       |
-
-An unknown `jobType` is a `400` listing the supported types.
-
-**List query parameters**
-
-| Parameter | Type | Default | Notes                                        |
-| --------- | ---- | ------- | -------------------------------------------- |
-| `limit`   | int  | `20`    | clamped to 100                              |
-| `cursor`  | string | —      | `nextCursor` from a previous page           |
-
-**Job response**
-
-```json
-{
-  "id": 1,
-  "name": "nightly-report",
-  "description": "Builds and emails the daily report",
-  "status": "QUEUED",
-  "jobType": "SIMULATED",
-  "payload": { "region": "eu" },
-  "createdAt": "2026-01-01T10:00:00Z",
-  "queuedAt": "2026-01-01T10:00:01Z",
-  "startedAt": null,
-  "completedAt": null,
-  "nextAttemptAt": "2026-01-01T10:00:06Z",
-  "attemptCount": 1,
-  "maxAttempts": 3,
-  "attemptsLeft": 2,
-  "failureReason": "IllegalStateException: upstream timeout",
-  "lastError": "IllegalStateException: upstream timeout"
-}
-```
-
-**List response** (breaking change in v0.3 — it was a bare array in v0.2)
-
-```json
-{
-  "items": [ /* JobResponse */ ],
-  "nextCursor": "MTc2NzIyNjQ0MDAwMHw0Mg",
-  "hasMore": true,
-  "total": 39
-}
-```
-
-**Stats response**
-
-```json
-{ "total": 39, "pending": 2, "queued": 0, "running": 0,
-  "completed": 36, "failed": 1, "retrying": 0, "activeCount": 0 }
-```
-
-`activeCount` is `queued + running`; the UI polls while it is non-zero.
-
-**Error body** and status codes are unchanged from v0.2: `400` validation or unknown job type,
-`404` missing job, `409` wrong state for the transition, `500` unexpected.
-
----
-
-## 6. Example requests
+Errors use one shape: `{ timestamp, status, error, message, path, fieldErrors }`
+→ `400` validation, `404` missing, `409` wrong state, `500` unexpected.
 
 ```bash
 BASE=http://localhost:8080/api/jobs
 
 # Create
-curl -i -X POST "$BASE" -H "Content-Type: application/json" \
-  -d '{"name":"nightly-report","description":"Builds the daily report"}'
-
-# Create a job that always fails, so retries and the dead letter queue can be exercised
 curl -X POST "$BASE" -H "Content-Type: application/json" \
-  -d '{"name":"doomed","description":"always fails","jobType":"FAIL","maxAttempts":3}'
+  -d '{"name":"nightly-report","description":"Builds the daily report","maxAttempts":3}'
 
-# Unknown job type -> 400
-curl -i -X POST "$BASE" -H "Content-Type: application/json" \
-  -d '{"name":"x","description":"y","jobType":"NOPE"}'
-
-# Run, then watch it progress
-curl -X POST "$BASE/1/execute"     # -> QUEUED, then RUNNING, then COMPLETED
+# Run, then watch
+curl -X POST "$BASE/1/execute"
 curl "$BASE/1"
 
-# Paging
-curl "$BASE?limit=10"
-curl "$BASE?limit=10&cursor=MTc2NzIyNjQ0MDAwMHw0Mg"
-
-# Counts and dead letters
-curl "$BASE/stats"
-curl "$BASE/dead-letter"
-
-# Give a dead-lettered job a fresh budget, then run it
-curl -X POST "$BASE/8/requeue"
-curl -X POST "$BASE/8/execute"
-
-# Errors and deletion
-curl -i "$BASE/999999"                  # 404
-curl -i -X POST "$BASE/1/execute"       # 409 once no longer PENDING/retryable
-curl -i -X DELETE "$BASE/1"             # 204
+# A job that always fails, to exercise retries and the dead letter queue
+curl -X POST "$BASE" -H "Content-Type: application/json" \
+  -d '{"name":"payment-reconcile","description":"Always fails","jobType":"FAIL","maxAttempts":2}'
 ```
 
-Inspect the queue directly:
+## Configuration
+
+Everything is environment-driven; nothing sensitive is hardcoded. See
+[`backend/.env.example`](backend/.env.example) and [`worker/.env.example`](worker/.env.example).
+
+| Variable | Default | Applies to |
+|---|---|---|
+| `DB_HOST` `DB_PORT` `DB_NAME` `DB_USERNAME` | `localhost` `5432` `taskflow` `postgres` | both |
+| `DB_PASSWORD` | **required** | both |
+| `REDIS_HOST` `REDIS_PORT` | `localhost` `6379` | both |
+| `JOB_QUEUE_KEY` | `taskflow:jobs` | both — must match |
+| `JOB_SIMULATED_DURATION_MS` | `2500` | worker |
+| `JOB_DEFAULT_MAX_ATTEMPTS` | `3` | both |
+| `JOB_RETRY_BASE_DELAY` | `5s` | both — doubles per attempt |
+| `JOB_RETRY_MAX_DELAY` | `5m` | both |
+| `WORKER_CONCURRENCY` | `2` | worker |
+| `CORS_ALLOWED_ORIGINS` | `http://localhost:5173` | API |
+
+## Project structure
+
+```
+taskflow/
+├── pom.xml                  # parent — modules: core, backend, worker
+├── core/                    # shared domain + Flyway migrations
+│   └── src/main/{java/com/taskflow/{config,dto,entity,exception,handler,repository,retry},
+│                 resources/db/migration}
+├── backend/                 # REST API
+│   └── src/main/{java/com/taskflow/{config,controller,exception,queue,service},resources}
+├── worker/                  # queue consumer
+│   └── src/main/{java/com/taskflow/worker/{config,handler,job},resources}
+├── frontend/
+│   └── src/{api,components,hooks,lib,pages}
+├── docker/                  # Dockerfile (MODULE build arg)
+├── docs/images/             # README assets
+└── docker-compose.yml
+```
+
+| Module | Role |
+|---|---|
+| `core` | Domain model, repository queries, `JobHandler` contract and the migrations, shared by both services so they run identical DDL. |
+| `backend` | REST API. Never executes work; only saves jobs and publishes their ids. |
+| `worker` | Queue consumer. Claims jobs, runs handlers, settles the outcome. |
+| `frontend` | React dashboard. |
+
+## Testing
 
 ```bash
-redis-cli LLEN   taskflow:jobs             # waiting for a worker
-redis-cli ZCARD  taskflow:jobs:scheduled   # waiting out a backoff
-redis-cli LRANGE taskflow:jobs:dlq 0 -1    # dead lettered ids
+mvn test                # 77 tests
+cd frontend && npm run lint && npm run build
 ```
 
----
+| Area | Suite | Covers |
+|---|---|---|
+| Backoff | `BackoffPolicyTest` | doubling, cap, overflow safety |
+| API | `JobServiceTest`, `JobControllerTest`, `RedisJobQueueTest`, `JobExecutionDispatcherTest`, `JobReleaseServiceTest` | creation, queueing rules, cursor paging, status codes, validation, error shape, releasing on outage |
+| Worker | `JobExecutorTest`, `RetrySchedulerTest`, `QueuedJobRecoveryTest`, `RedisJobQueueReaderTest`, `JobWorkerConsumerTest` | claiming, handler dispatch, retry vs dead letter, due-retry promotion, recovery, consumer resilience |
 
-## 7. How it works
+Beyond the suite, these were verified against real PostgreSQL and Redis: the retry chain,
+dead-lettering, three-replica concurrency (12 jobs → 12 executions), cursor paging (39 jobs, no
+gaps or repeats) and worker restarts mid-job.
 
-### Retries
+## Design decisions
 
-1. `JobExecutor` claims the job with a conditional UPDATE that also increments `attempt_count`,
-   so the count reflects attempts actually started.
-2. It resolves a `JobHandler` from the job's `jobType` and runs it. Throwing is how a handler
-   reports failure.
-3. On failure, `BackoffPolicy` computes `min(base × 2^(attempt-1), max)` and the job is either
-   - **attempts left** → `scheduleRetry`: back to `QUEUED` with `next_attempt_at`, and the id is
-     scored into the `taskflow:jobs:scheduled` sorted set;
-   - **attempts exhausted** → `markFailed` and the id is pushed to `taskflow:jobs:dlq`.
-4. `RetryScheduler` ticks every second and promotes entries whose score has passed onto the main
-   list. A waiting retry therefore occupies Redis, not a consumer slot.
+**Multi-module, shared domain.** The API and the worker must agree on the table, the statuses and
+the claim queries. `core` holds them once — duplicating the entity across two services is how
+schema drift starts.
 
-Backoff is measured from attempt 1: `5s`, `10s`, `20s`, … capped at `5m`.
+**Flyway owns the schema.** Hibernate runs `ddl-auto: validate`: it checks the mapping and
+nothing else. An earlier version let Hibernate write the schema, which silently froze the enum
+values into a `CHECK` constraint and broke the next release.
 
-### Preventing duplicate execution
+**Claiming in the database, not Redis.** A `SETNX` lock needs TTL cleanup and is still defeated
+by a worker dying mid-job. A conditional `UPDATE` is atomic, needs no cleanup, and survives
+duplicate delivery, extra workers and restarts.
 
-Two conditional UPDATEs, both atomic:
+**Counters from the server.** Once pagination landed, deriving counts from the loaded page would
+report "20 jobs" when 500 existed. The same reasoning drives polling off the server's
+`activeCount`, so a queued job on page 3 still keeps the view live.
 
-| Guard | Where | Prevents |
-| ----- | ----- | -------- |
-| `claimForQueueing` — `WHERE status='PENDING' OR (status='FAILED' AND attemptCount < maxAttempts)` | API | the same job being queued twice |
-| `claimForExecution` — `WHERE status='QUEUED'`, increments `attempt_count` | Worker | the same job being executed twice |
+## Limitations
 
-Redis gives at-least-once delivery and a blocking pop removes the id before the work is done, so
-neither guard is optional. Verified: 12 jobs across 3 worker replicas produced exactly 12
-executions and zero double-runs.
+Known and deliberate, not hidden:
 
-### Why a sorted set for the schedule
+- **Redis list, not Streams.** At-least-once delivery comes from the database claim plus startup
+  recovery. There's no ack or pending-entries mechanism.
+- **Retry policy is global.** Every job shares one base delay and cap; no per-job policy.
+- **No observability.** Logs only — no metrics, dashboard or structured JSON logging.
+- **No integration test suite.** The 77 tests are unit and web-slice with mocks. Only the manual
+  runs above touched real infrastructure.
+- **Single tenant.** No authentication, no per-user ownership.
+- **No migration rollback story** for Flyway.
 
-Redis has no "push at time T". A sorted set scored by the eligible instant gives an ordered,
-atomically removable due-set in one call (`ZRANGEBYSCORE`), which is exactly what promoting due
-retries needs.
+## Roadmap
 
-### Graceful degradation
-
-| Failure | Behaviour |
-| ------- | --------- |
-| **Redis down, API side** | The publish fails, the job is released back to `PENDING` with `failureReason`, and the user can press Run again. The response is still `200` — an after-commit callback cannot change an HTTP status, so the outcome is reported in the data and the logs. |
-| **Redis down, worker side** | The consume loop logs, backs off 5s and keeps polling. `RetryScheduler` tolerates it too. Nothing crashes. |
-| **Worker down** | Jobs sit in `QUEUED` with their ids in Redis. `QueuedJobRecovery` re-publishes every `QUEUED` row on worker startup; the claim guard makes a duplicate push harmless. |
-| **Worker dies mid-job** | Same recovery path on the next startup; `attempt_count` prevents the attempt from being counted twice. |
-| **Dead-letter push fails** | The row is already terminally `FAILED`, and the API lists dead letters from PostgreSQL, so only the Redis-side view is affected. |
-| **Unknown `jobType` in the DB** | Fails terminally rather than retrying forever on a condition that cannot change. |
-
-### Schema management
-
-Flyway owns the schema; Hibernate runs with `ddl-auto: validate`, so it can verify the mapping but
-never alter it. Migrations live in `core/src/main/resources/db/migration`, so the API and the
-worker apply the same DDL.
-
-`baseline-on-migrate: true` with `baseline-version: 1` adopts a database created by v0.2 (which
-had no Flyway history): `V1__baseline` is treated as applied and only
-`V2__durable_execution` runs. A fresh database runs both.
-
-### Pagination
-
-Keyset (cursor) pagination on `(created_at DESC, id DESC)`. The cursor is an opaque
-base64 `epochMillis:id` pair; the id tiebreaker keeps rows with identical timestamps from being
-skipped or repeated when new jobs arrive mid-scroll. The service over-fetches one row to know
-whether a further page exists, so no extra count query is needed.
-
-Two consequences that are easy to get wrong, and are handled:
-
-- **Counts come from the server.** Deriving them from the loaded page would report "20 of 500".
-  `JobStatistics` now renders `/api/jobs/stats`.
-- **Polling follows `activeCount`, not the page contents.** Otherwise a `QUEUED` job on page 3
-  would stop the refresh loop.
-
-### Job handlers
-
-`JobHandler` and `JobExecutionContext` live in `core` so the API can validate a type without
-depending on the worker that implements it. `JobType` is an enum — `SIMULATED` (sleeps),
-`PING` (instant), `FAIL` (always throws) — so validation needs no registry wiring.
-
-Adding a type is: an enum constant, a `JobHandler` bean, a line in `JobHandlerConfig`.
-
-This replaces the v0.1/v0.2 convention of failing any job whose name started with `fail:`.
-
----
-
-## 8. Tests
-
-```bash
-mvn test
-```
-
-| Suite | Covers |
-| ----- | ------ |
-| `BackoffPolicyTest` | doubling, cap, overflow safety, non-positive attempts |
-| `JobServiceTest` | create/trim/type validation, queueing rules, requeue, cursor paging, stats |
-| `JobControllerTest` | status codes, page envelope, `400` on bad `jobType`, new endpoints |
-| `RedisJobQueueTest` | LPUSH, `QueueUnavailableException` on failure |
-| `JobExecutionDispatcherTest` | publishes after commit, releases on queue outage |
-| `JobReleaseServiceTest` | `QUEUED → PENDING` with a reason |
-| `JobExecutorTest` | claim, handler context, retry vs dead letter, unknown type, Redis outages |
-| `RetrySchedulerTest` | promotes due retries, survives Redis outage, tolerates a lost race |
-| `QueuedJobRecoveryTest` | re-publishes stranded jobs, reschedules waiting retries |
-| `RedisJobQueueReaderTest` | BRPOP, timeout, malformed entry, poll-timeout cap |
-| `JobWorkerConsumerTest` | dispatch, survives queue outage and executor crash, clean stop |
-
----
-
-## 9. Upgrading a v0.1/v0.2 database
-
-Run once if your database predates v0.3:
-
-```sql
-ALTER TABLE jobs DROP CONSTRAINT IF EXISTS jobs_status_check;
-```
-
-v0.1 let Hibernate generate a CHECK constraint freezing the old enum values into the database.
-Fresh databases are unaffected — v0.2 onward maps the column explicitly so it is not regenerated.
-
----
-
-## 10. Roadmap
-
-- [ ] Redis Streams with consumer groups and ack, replacing the BRPOP loop
-- [ ] Per-job retry policy (fixed delay, custom cap, no retry)
+- [ ] Redis Streams with consumer groups and ack
+- [ ] Per-job retry policies
 - [ ] Prometheus metrics and a dashboard for queue depth, latency and failure rate
 - [ ] Structured JSON logging with `jobId` context
 - [ ] Testcontainers integration tests against real PostgreSQL and Redis
 - [ ] Job cancellation while queued or running
-- [ ] Authentication and per-user job ownership
-- [ ] Kubernetes / cloud deployment
+- [ ] Authentication and per-user ownership
+- [ ] Cloud deployment
+
+---
+
+<div align="center">
+<sub>Built with Java 21, Spring Boot, React and Redis. <a href="https://github.com/prakashseervi61/TaskFlow/issues">Found a bug?</a></sub>
+</div>

@@ -13,10 +13,13 @@ export default function Header({ jobCount }) {
         </div>
 
         <div className="flex items-center gap-4">
-          <span className="hidden text-xs text-slate-500 sm:inline">v0.1 MVP</span>
-          <span className="rounded-full bg-slate-100 px-2.5 py-1 font-mono text-xs text-slate-600">
-            {jobCount} {jobCount === 1 ? 'job' : 'jobs'}
-          </span>
+          <span className="hidden text-xs text-slate-500 sm:inline">v0.3</span>
+          {/* only shown where the count is actually known */}
+          {typeof jobCount === 'number' && (
+            <span className="rounded-full bg-slate-100 px-2.5 py-1 font-mono text-xs text-slate-600">
+              {jobCount} {jobCount === 1 ? 'job' : 'jobs'}
+            </span>
+          )}
         </div>
       </div>
     </header>
