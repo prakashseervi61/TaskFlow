@@ -1,0 +1,51 @@
+# ---------- Java / Maven ----------
+# Every module builds to its own target/ (core, backend, worker)
+target/
+*/target/
+out/
+*.class
+*.jar
+*.war
+!.mvn/wrapper/maven-wrapper.jar
+
+# ---------- Node / Vite ----------
+node_modules/
+*/node_modules/
+dist/
+*/dist/
+.vite/
+stats.html
+*.local
+npm-debug.log*
+yarn-error.log*
+
+# ---------- Environment / secrets ----------
+.env
+.env.*
+!.env.example
+backend/src/main/resources/application-local.yml
+backend/src/main/resources/application-local.properties
+
+# ---------- IDEs ----------
+.idea/
+*.iml
+*.ipr
+*.iws
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+*.swp
+*.swo
+.classpath
+.project
+.settings/
+nbproject/private/
+
+# ---------- OS ----------
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ---------- Logs ----------
+*.log
+logs/

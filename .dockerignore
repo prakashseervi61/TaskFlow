@@ -1,0 +1,16 @@
+target/
+*/target/
+node_modules/
+*/node_modules/
+dist/
+*/dist/
+.git/
+.gitignore
+.idea/
+*.iml
+*.log
+.env
+.env.*
+!.env.example
+README.md
+docker-compose.yml
