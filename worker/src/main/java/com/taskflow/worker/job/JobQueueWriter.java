@@ -2,7 +2,6 @@ package com.taskflow.worker.job;
 
 import com.taskflow.config.TaskflowProperties;
 import java.time.Instant;
-import java.util.List;
 import java.util.Set;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -92,37 +91,5 @@ public class JobQueueWriter {
         }
         redisTemplate.opsForList().leftPush(queueKey, jobId);
         return true;
-    }
-
-    public void cancelScheduled(Long jobId) {
-        redisTemplate.opsForZSet().remove(scheduledKey, jobId.toString());
-    }
-
-    /** Queue-side dead letters. The API's dead-letter view reads PostgreSQL instead. */
-    public List<String> deadLetterEntries() {
-        List<String> entries = redisTemplate.opsForList().range(deadLetterKey, 0, -1);
-        return entries == null ? List.of() : entries;
-    }
-
-    public String queueKey() {
-        return queueKey;
-    }
-
-    public String scheduledKey() {
-        return scheduledKey;
-    }
-
-    public String deadLetterKey() {
-        return deadLetterKey;
-    }
-
-    /** True when Redis is reachable; used to decide whether a publish is worth attempting. */
-    public boolean isReachable() {
-        try {
-            redisTemplate.opsForList().size(queueKey);
-            return true;
-        } catch (DataAccessException ex) {
-            return false;
-        }
     }
 }

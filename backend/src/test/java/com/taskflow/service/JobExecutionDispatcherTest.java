@@ -9,7 +9,7 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-import com.taskflow.queue.JobQueue;
+import com.taskflow.queue.RedisJobQueue;
 import com.taskflow.queue.QueueUnavailableException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -22,7 +22,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 class JobExecutionDispatcherTest {
 
     @Mock
-    private JobQueue jobQueue;
+    private RedisJobQueue jobQueue;
 
     @Mock
     private JobReleaseService jobReleaseService;

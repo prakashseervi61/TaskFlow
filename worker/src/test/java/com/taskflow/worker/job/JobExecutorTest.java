@@ -57,7 +57,7 @@ class JobExecutorTest {
 
     private JobExecutor executorFor(List<JobHandler> handlers) {
         TaskflowProperties properties = new TaskflowProperties(
-                new TaskflowProperties.Cors(List.of(), List.of()),
+                new TaskflowProperties.Cors(List.of()),
                 new TaskflowProperties.Queue("taskflow:jobs"),
                 new TaskflowProperties.Execution(0L));
         BackoffPolicy backoff =

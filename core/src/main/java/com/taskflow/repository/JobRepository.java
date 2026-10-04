@@ -23,8 +23,6 @@ import org.springframework.transaction.annotation.Transactional;
  */
 public interface JobRepository extends JpaRepository<Job, Long> {
 
-    List<Job> findAllByOrderByCreatedAtDesc();
-
     long countByStatus(JobStatus status);
 
     /** Queued jobs waiting on a retry backoff, i.e. not yet eligible for the worker. */
@@ -50,16 +48,6 @@ public interface JobRepository extends JpaRepository<Job, Long> {
             @Param("cursorCreatedAt") Instant cursorCreatedAt,
             @Param("cursorId") Long cursorId,
             Pageable pageable);
-
-    /** Jobs sitting in QUEUED whose retry backoff has elapsed. */
-    @Transactional(readOnly = true)
-    @Query("""
-            select j from Job j
-            where j.status = :queued and (j.nextAttemptAt is null or j.nextAttemptAt <= :now)
-            order by j.nextAttemptAt asc nulls first, j.id asc
-            """)
-    List<Job> findEligibleForRetry(
-            @Param("queued") JobStatus queued, @Param("now") Instant now, Pageable pageable);
 
     /**
      * Moves PENDING → QUEUED, or re-queues a FAILED job that still has attempts left. Two

@@ -19,7 +19,7 @@ import org.junit.jupiter.api.Test;
 
 class JobWorkerConsumerTest {
 
-    private final JobQueueReader queueReader = mock(JobQueueReader.class);
+    private final RedisJobQueueReader queueReader = mock(RedisJobQueueReader.class);
     private final JobExecutor simulator = mock(JobExecutor.class);
 
     /** Runs work on the calling thread so assertions stay deterministic. */

@@ -115,7 +115,7 @@ class RedisJobQueueReaderTest {
 
     private TaskflowProperties properties(String queueKey) {
         return new TaskflowProperties(
-                new TaskflowProperties.Cors(List.of(), List.of()),
+                new TaskflowProperties.Cors(List.of()),
                 new TaskflowProperties.Queue(queueKey),
                 new TaskflowProperties.Execution(0L));
     }

@@ -26,7 +26,7 @@ public class JobWorkerConsumer {
 
     private static final Duration REDIS_BACKOFF = Duration.ofSeconds(5);
 
-    private final JobQueueReader queueReader;
+    private final RedisJobQueueReader queueReader;
     private final JobExecutor executor;
     private final Executor jobConsumerExecutor;
     private final Duration pollTimeout;
@@ -34,7 +34,7 @@ public class JobWorkerConsumer {
     private final Thread loopThread;
 
     public JobWorkerConsumer(
-            JobQueueReader queueReader,
+            RedisJobQueueReader queueReader,
             JobExecutor executor,
             @Qualifier("jobConsumerExecutor") Executor jobConsumerExecutor,
             WorkerProperties workerProperties) {

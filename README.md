@@ -161,7 +161,7 @@ cd frontend && npm install && npm run dev             # terminal 3
 ┌────────┐     ┌──────────────┐     ┌─────────────┐     ┌───────┐     ┌────────┐
 │ React  │ ──▶ │  Backend API │ ──▶ │ PostgreSQL  │     │ Redis │ ◀── │ Worker │
 │        │     │              │     │             │     │       │     │        │
-│  :5173 │     │    :8080     │     │  system of  │     │ queue │     │ :8081  │
+│  :5173 │     │    :8080     │     │  system of  │     │ queue │     │  none  │
 └────────┘     └──────────────┘     │   record    │     └───────┘     └────────┘
                  saves + enqueues    └─────────────┘       ▲                │
                                                        LPUSH after         │
@@ -169,6 +169,9 @@ cd frontend && npm install && npm run dev             # terminal 3
                                                           └──── BRPOP ───────┘
                                                                writes results
 ```
+
+The worker is **headless** — it runs no HTTP server and publishes no port, which is also why
+`--scale worker=N` works without port collisions.
 
 Three Redis keys, each with one job:
 

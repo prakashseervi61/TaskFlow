@@ -5,10 +5,9 @@ import java.time.Instant;
 import java.util.Base64;
 
 /**
- * Opaque keyset cursor: the {@code (createdAt, id)} pair of the last row of a page.
- *
- * <p>Base64 of {@code <epochMillis>:<id>} so callers treat it as a token. The id tiebreaker is
- * what makes paging stable when several jobs share a timestamp.
+ * Opaque keyset cursor: the {@code createdAt:id} of the last row on a page, Base64 encoded so
+ * callers treat it as a token. The id half is what keeps paging stable when several jobs share
+ * a timestamp.
  */
 record PageCursor(Instant createdAt, Long id) {
 
@@ -22,8 +21,8 @@ record PageCursor(Instant createdAt, Long id) {
     }
 
     /**
-     * @return null when the cursor is absent; a malformed cursor yields null too, which restarts
-     *     from the first page rather than failing the request
+     * @return null when absent or malformed, which restarts from the first page rather than
+     *     failing the request
      */
     static PageCursor decode(String cursor) {
         if (cursor == null || cursor.isBlank()) {
@@ -32,9 +31,6 @@ record PageCursor(Instant createdAt, Long id) {
         try {
             String raw = new String(Base64.getUrlDecoder().decode(cursor), StandardCharsets.UTF_8);
             int separator = raw.indexOf(':');
-            if (separator < 1) {
-                return null;
-            }
             return new PageCursor(
                     Instant.ofEpochMilli(Long.parseLong(raw.substring(0, separator))),
                     Long.parseLong(raw.substring(separator + 1)));

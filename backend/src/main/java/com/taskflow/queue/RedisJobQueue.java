@@ -12,7 +12,7 @@ import org.springframework.stereotype.Component;
  * list is first-in-first-out.
  */
 @Component
-public class RedisJobQueue implements JobQueue {
+public class RedisJobQueue {
 
     private static final Logger log = LoggerFactory.getLogger(RedisJobQueue.class);
 
@@ -25,7 +25,6 @@ public class RedisJobQueue implements JobQueue {
         log.info("Job queue backed by Redis list '{}'", queueKey);
     }
 
-    @Override
     public void enqueue(Long jobId) {
         try {
             redisTemplate.opsForList().leftPush(queueKey, jobId.toString());

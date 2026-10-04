@@ -23,30 +23,19 @@ public class CorsConfig {
 
     @Bean
     public WebMvcConfigurer corsConfigurer() {
-        List<String> origins = allowedOrigins();
-        List<String> methods = allowedMethods();
+        List<String> origins = properties.cors().allowedOrigins();
 
         return new WebMvcConfigurer() {
             @Override
             public void addCorsMappings(CorsRegistry registry) {
                 registry.addMapping("/api/**")
                         .allowedOrigins(origins.toArray(String[]::new))
-                        .allowedMethods(methods.toArray(String[]::new))
+                        .allowedMethods(DEFAULT_METHODS.toArray(String[]::new))
                         .allowedHeaders("*")
                         .exposedHeaders("Location")
                         .allowCredentials(true)
                         .maxAge(3600);
             }
         };
-    }
-
-    private List<String> allowedOrigins() {
-        List<String> configured = properties.cors().allowedOrigins();
-        return configured.isEmpty() ? List.of("http://localhost:5173") : configured;
-    }
-
-    private List<String> allowedMethods() {
-        List<String> configured = properties.cors().allowedMethods();
-        return configured.isEmpty() ? DEFAULT_METHODS : configured;
     }
 }

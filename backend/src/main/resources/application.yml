@@ -34,11 +34,6 @@ spring:
       database: ${REDIS_DATABASE:0}
       timeout: ${REDIS_TIMEOUT:2s}
       connect-timeout: ${REDIS_CONNECT_TIMEOUT:2s}
-      lettuce:
-        pool:
-          enabled: true
-          max-active: 8
-          max-idle: 8
 
 server:
   port: ${SERVER_PORT:8080}

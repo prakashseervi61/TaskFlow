@@ -3,7 +3,6 @@
 #   docker compose up --build
 #   frontend   → http://localhost:5173
 #   api        → http://localhost:8080/api/jobs
-#   worker     → http://localhost:8081/actuator/health
 #
 # Every credential here is a local-only development default. Override them with a .env file
 # before using this anywhere that matters.
@@ -88,10 +87,6 @@ services:
       JOB_QUEUE_KEY: taskflow:jobs
       JOB_SIMULATED_DURATION_MS: ${JOB_SIMULATED_DURATION_MS:-2500}
       WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-2}
-    # No published port: every replica would fight over the same host port, which breaks
-    # --scale. The actuator endpoint is still served on 8081 inside the compose network.
-    expose:
-      - "8081"
     depends_on:
       postgres:
         condition: service_healthy

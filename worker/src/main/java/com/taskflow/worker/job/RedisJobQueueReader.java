@@ -14,7 +14,7 @@ import org.springframework.stereotype.Component;
  * nothing.
  */
 @Component
-public class RedisJobQueueReader implements JobQueueReader {
+public class RedisJobQueueReader {
 
     private static final Logger log = LoggerFactory.getLogger(RedisJobQueueReader.class);
 
@@ -43,7 +43,6 @@ public class RedisJobQueueReader implements JobQueueReader {
         log.info("Worker consuming from Redis list '{}' (max poll {})", queueKey, maxPollTimeout);
     }
 
-    @Override
     public Long poll(Duration timeout) {
         Duration effective = capTimeout(timeout);
         try {

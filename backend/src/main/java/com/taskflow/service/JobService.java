@@ -65,13 +65,6 @@ public class JobService {
         return JobResponse.from(saved);
     }
 
-    @Transactional(readOnly = true)
-    public List<JobResponse> findAll() {
-        return jobRepository.findAllByOrderByCreatedAtDesc().stream()
-                .map(JobResponse::from)
-                .toList();
-    }
-
     /**
      * Newest-first keyset page.
      *

@@ -1,6 +1,6 @@
 package com.taskflow.service;
 
-import com.taskflow.queue.JobQueue;
+import com.taskflow.queue.RedisJobQueue;
 import com.taskflow.queue.QueueUnavailableException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -24,10 +24,10 @@ public class JobExecutionDispatcher {
 
     private static final Logger log = LoggerFactory.getLogger(JobExecutionDispatcher.class);
 
-    private final JobQueue jobQueue;
+    private final RedisJobQueue jobQueue;
     private final JobReleaseService jobReleaseService;
 
-    public JobExecutionDispatcher(JobQueue jobQueue, JobReleaseService jobReleaseService) {
+    public JobExecutionDispatcher(RedisJobQueue jobQueue, JobReleaseService jobReleaseService) {
         this.jobQueue = jobQueue;
         this.jobReleaseService = jobReleaseService;
     }

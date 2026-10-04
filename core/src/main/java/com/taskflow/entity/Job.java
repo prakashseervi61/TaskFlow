@@ -200,11 +200,6 @@ public class Job {
         this.payload = payload;
     }
 
-    /** True while the job still has attempts left, i.e. it may still be retried. */
-    public boolean hasAttemptsLeft() {
-        return attemptCount < maxAttempts;
-    }
-
     /** True when the job is waiting for a retry to become eligible. */
     public boolean isWaitingForRetry() {
         return nextAttemptAt != null && nextAttemptAt.isAfter(Instant.now());

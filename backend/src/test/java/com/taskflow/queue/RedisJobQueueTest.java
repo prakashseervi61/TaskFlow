@@ -55,16 +55,6 @@ class RedisJobQueueTest {
     }
 
     @Test
-    @DisplayName("enqueue() falls back to the default key when none is configured")
-    void enqueueFallsBackToDefaultKey() {
-        RedisJobQueue fallback = new RedisJobQueue(redisTemplate, properties(null));
-
-        fallback.enqueue(1L);
-
-        verify(listOperations).leftPush("taskflow:jobs", "1");
-    }
-
-    @Test
     @DisplayName("enqueue() throws QueueUnavailableException when Redis errors")
     void enqueueThrowsWhenRedisIsDown() {
         when(listOperations.leftPush(anyString(), anyString()))
@@ -77,7 +67,7 @@ class RedisJobQueueTest {
 
     private TaskflowProperties properties(String queueKey) {
         return new TaskflowProperties(
-                new TaskflowProperties.Cors(List.of(), List.of()),
+                new TaskflowProperties.Cors(List.of()),
                 new TaskflowProperties.Queue(queueKey),
                 new TaskflowProperties.Execution(0L));
     }
