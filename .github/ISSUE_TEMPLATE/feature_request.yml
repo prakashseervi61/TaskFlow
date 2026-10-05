@@ -1,0 +1,55 @@
+name: Feature request
+description: Suggest a job type, a capability, or a fix for something on the roadmap
+labels: enhancement
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Have a look at the [roadmap](https://github.com/prakashseervi61/TaskFlow#roadmap) first —
+        if it's already listed, a comment there is more useful than a new issue.
+
+  - type: dropdown
+    id: kind
+    attributes:
+      label: What kind of contribution is this?
+      options:
+        - New job type / handler
+        - Frontend or UI improvement
+        - Infrastructure or config
+        - Tests or tooling
+        - Documentation
+        - Something else
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem does this solve?
+      description: The "why" matters more than the "what" here.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What would you like to happen?
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives you considered
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: contrib
+    attributes:
+      label: Contribution
+      options:
+        - label: I'm happy to implement this myself — please assign it to me
+          required: false
+        - label: I'd like to pick this up but need some guidance
+          required: false

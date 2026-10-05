@@ -90,6 +90,7 @@ PENDING ──Run──▶ QUEUED ──worker claims──▶ RUNNING ──┬
 - [Design decisions](#design-decisions)
 - [Limitations](#limitations)
 - [Roadmap](#roadmap)
+- [Contributing](#contributing)
 
 ---
 
@@ -100,10 +101,10 @@ PENDING ──Run──▶ QUEUED ──worker claims──▶ RUNNING ──┬
 | **Async execution** | REST API enqueues, a separate worker service executes |
 | **Automatic retries** | Exponential backoff — 5s, 10s, 20s… capped at 5m |
 | **Dead-letter queue** | Exhausted jobs are quarantined, never silently dropped |
-| **Exactly-once execution** | Database-level claims mean retries and multiple workers can't double-run a job |
+| **Exactly-once claiming** | One conditional `UPDATE` decides ownership — duplicate deliveries and extra workers can't run the same attempt twice |
 | **Live UI** | Status updates every second, no refresh needed |
 | **Pluggable job types** | Write one handler, inherit the queue, retries and UI |
-| **Graceful degradation** | Redis or worker down? Jobs wait safely and resume automatically |
+| **Graceful degradation** | Redis or worker down? Jobs wait safely in `QUEUED` and resume automatically |
 | **Horizontal scaling** | `docker compose up -d --scale worker=3` |
 | **Cursor pagination** | Constant-time paging, stable while new jobs arrive |
 | **Flyway migrations** | Schema owned by versioned SQL, verified by Hibernate on boot |
@@ -228,8 +229,12 @@ ten-minute backoff costs one Redis entry, not a thread.
 | Redis unreachable (API) | Job is released back to `PENDING` with a reason; press Run again |
 | Redis unreachable (worker) | Loop logs, backs off 5s, resumes automatically |
 | Worker goes down | Jobs sit in `QUEUED` with ids in Redis; re-published on worker startup |
-| Worker dies mid-job | Same recovery, on the next startup |
+| Worker dies **before** claiming | Still `QUEUED`, so the same recovery applies |
+| Worker dies **after** claiming | ⚠️ Stranded in `RUNNING` — no lease to expire it. See [Limitations](#limitations) |
 | Dead-letter push fails | Row is already `FAILED`, and the API lists dead letters from PostgreSQL |
+
+The **dies after claiming** row is a real gap rather than an oversight: recovery only looks at
+`QUEUED`, so it cannot see a job that already became `RUNNING`.
 
 ## API
 
@@ -312,7 +317,7 @@ taskflow/
 ## Testing
 
 ```bash
-mvn test                # 77 tests
+mvn test                # 76 tests
 cd frontend && npm run lint && npm run build
 ```
 
@@ -348,28 +353,103 @@ report "20 jobs" when 500 existed. The same reasoning drives polling off the ser
 
 Known and deliberate, not hidden:
 
+- **A worker that dies after claiming a job strands it in `RUNNING` forever.** Startup recovery
+  only scans `QUEUED`, and every transition out of `RUNNING` requires the original worker, which
+  is gone. `POST /requeue` only accepts `FAILED`, so the job isn't in the dead-letter list either
+  — it is invisible in the UI and needs manual SQL. The fix is a lease with a reclaim timeout;
+  it is the top item on the roadmap. Known to be correct about *duplicate* delivery, incomplete
+  about *abandoned* delivery.
 - **Redis list, not Streams.** At-least-once delivery comes from the database claim plus startup
   recovery. There's no ack or pending-entries mechanism.
+- **Exactly-once execution is not exactly-once effects.** The claim guarantees one worker owns an
+  attempt. It cannot stop a handler that performs five side effects, dies after three, and has all
+  five repeated on retry. Job bodies need to be idempotent, and that contract isn't written down
+  yet.
 - **Retry policy is global.** Every job shares one base delay and cap; no per-job policy.
 - **No observability.** Logs only — no metrics, dashboard or structured JSON logging.
-- **No integration test suite.** The 77 tests are unit and web-slice with mocks. Only the manual
+- **No integration test suite.** The 76 tests are unit and web-slice with mocks. Only the manual
   runs above touched real infrastructure.
 - **Single tenant.** No authentication, no per-user ownership.
 - **No migration rollback story** for Flyway.
 
 ## Roadmap
 
+Ordered roughly by how much they'd hurt in production, not by how fun they are.
+
+**Correctness**
+
+- [ ] **Lease + reclaim for abandoned jobs** — a reaper that moves stale `RUNNING` rows back to
+      `QUEUED` once past a timeout, so the existing retry machinery handles them for free. Cheapest
+      version reuses `startedAt` rather than adding a lease column and heartbeat thread
+- [ ] **Fencing token on writes** — a slow-but-alive worker whose lease expired must not settle a
+      job that has since been reclaimed. Needed for safe reclaim, not just nice-to-have
+- [ ] **Documented idempotency contract** for job bodies, and a note that reclaim + non-idempotent
+      body is worse than a stuck job
+- [ ] **Job cancellation** while queued or running
+
+**Reliability**
+
 - [ ] Redis Streams with consumer groups and ack
 - [ ] Per-job retry policies
+- [ ] Testcontainers integration tests against real PostgreSQL and Redis
+
+**Observability**
+
 - [ ] Prometheus metrics and a dashboard for queue depth, latency and failure rate
 - [ ] Structured JSON logging with `jobId` context
-- [ ] Testcontainers integration tests against real PostgreSQL and Redis
-- [ ] Job cancellation while queued or running
+
+**Platform**
+
 - [ ] Authentication and per-user ownership
 - [ ] Cloud deployment
 
 ---
 
+## Contributing
+
+Contributions are genuinely welcome, including your first open-source PR. The codebase is small
+enough to read in an evening, and the architecture decisions are written down above so you don't
+have to reverse-engineer intent.
+
+**Good first issues**
+
+| Contribution | Why it's a good first one |
+|---|---|
+| **Add a job type** | Four small edits, no new concepts — see below |
+| Add a status colour or empty state in the dashboard | Frontend-only, instantly visible |
+| Add a config option to `docker-compose.yml` | Isolated, low risk |
+| Write a missing test for an edge case you found | Self-contained |
+| Improve an error message | Small and welcome |
+
+**Adding a job type** is the best way to learn the codebase. It touches exactly four files:
+
+1. `core/src/main/java/com/taskflow/entity/JobType.java` — add the enum constant
+2. `worker/src/main/java/com/taskflow/worker/handler/YourJobHandler.java` — implement `JobHandler`
+3. `worker/src/main/java/com/taskflow/worker/config/JobHandlerConfig.java` — register a `@Bean`
+4. `frontend/src/lib/status.js` — add it to `JOB_TYPES`
+
+Copy `SimulatedJobHandler`. Throwing from `execute()` is how you signal failure; the worker decides
+whether that attempt retries or dead-letters.
+
+**Before you open a PR**
+
+```bash
+mvn test                          # 76 tests must pass
+cd frontend && npm run lint && npm run build
+```
+
+Keep the change focused — one concern per PR, and leave unrelated code alone. Match the existing
+style; the code is plain and heavily commented, and comments here explain *why*, not *what*.
+
+**Found something wrong?** Open an issue with what you expected, what happened, and how to
+reproduce it. Bug reports with a failing test or a `curl` that shows the problem are the fastest
+kind to act on.
+
+Full details, including the local dev loop and review expectations, are in
+**[CONTRIBUTING.md](CONTRIBUTING.md)**.
+
+---
+
 <div align="center">
-<sub>Built with Java 21, Spring Boot, React and Redis. <a href="https://github.com/prakashseervi61/TaskFlow/issues">Found a bug?</a></sub>
+<sub>Built with Java 21, Spring Boot, React and Redis. <a href="CONTRIBUTING.md">Contribute</a> · <a href="https://github.com/prakashseervi61/TaskFlow/issues">Found a bug?</a> · <a href="https://github.com/prakashseervi61/TaskFlow/issues/new?labels=good%20first%20issue">Good first issues</a></sub>
 </div>

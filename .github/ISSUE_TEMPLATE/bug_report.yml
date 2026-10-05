@@ -1,0 +1,66 @@
+name: Bug report
+description: Something doesn't work, or works differently than the README says
+labels: bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report this.
+
+        A failing test or a `curl` command that shows the problem is the fastest kind to act on.
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect to happen?
+      placeholder: The dashboard should update within a second of a job completing.
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: What happened instead?
+      placeholder: The count stayed at 3 and the row never left PENDING.
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      value: |
+        1.
+        2.
+        3.
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      render: shell
+      placeholder: |
+        docker compose logs worker
+        # or, for the API:
+        docker compose logs backend
+    validations:
+      required: false
+
+  - type: input
+    id: env
+    attributes:
+      label: Environment
+      value: Docker Compose
+      placeholder: e.g. Windows 11, JDK 21, Docker 27
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checks
+      options:
+        - label: I searched existing issues for this
+          required: false
